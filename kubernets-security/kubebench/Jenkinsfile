@@ -1,0 +1,125 @@
+pipeline{
+    agent any
+
+    environment {
+        deploymentName = "devsecops"
+        containerName = "devsecops-container"
+        serviceName = "devsecops-svc"
+        imageName = "fadhiljr/ms-sample:${GIT_COMMIT}"
+    }
+
+    stages {
+
+        stage('Build Artifact - Maven') {
+            steps {
+                    sh "mvn clean package -DskipTests=true"
+                    archive 'target/*.jar'
+            }
+        }
+
+        stage('Unit Tests - JUnit and JaCoCo') {
+            steps {
+                    sh "mvn test"
+            }
+        }
+
+        stage('SonarQube - SAST') {
+            steps {
+                withSonarQubeEnv('SonarQube') {
+                     sh "mvn sonar:sonar -Dsonar.projectKey=mssample -Dsonar.host.url=http://devsecops-demo-app.com:9000 -Dsonar.login=094858690495f456e6fr9c4b5a543g57c76f05"
+                }
+                timeout(time: 2, unit: 'MINUTES') {
+                    script {
+                        waitForQualityGate abortPipeline: true
+                    }
+                }
+                   
+            }
+        }
+
+        stage('Vulnerability Scan - Docker') {
+            steps {
+                parallel(
+                    "Dependency Scan": {
+                        sh "mvn dependency-check:check"
+                    },
+                    "Trivy Scan": {
+                        sh "bash trivy-docker-image-scan.sh"
+                    },
+                    "OPA Conftest":{
+                        sh 'docker run --rm -v ${pwd}:/project openpolicyagent/conftest test --policy dockerfile-security.rego Dockerfile'
+                    }
+
+                )
+            }
+        }
+
+        stage('Docker Build and Push') {
+            steps {
+                withDockerRegistry([credentialsId: "docker-hub", url: ""]) {
+                    sh "printenv"
+                    sh "sudo docker build -t fadhiljr/ms-sample:${GIT_COMMIT} ."
+                    sh "sudo docker push fadhiljr/ms-sample:${GIT_COMMIT}"
+                }
+            }
+        }
+
+        stage('Vulnerability Scan - Kubernets') {
+            steps {
+                parallel(
+                    "OPA Scan": {
+                         sh 'docker run --rm -v ${pwd}:/project openpolicyagent/conftest test --policy dockerfile-security.rego Dockerfile'
+                    },
+                    "Kubesec Scan": {
+                         sh "bash kubesec-scan.sh"
+                    }
+                )                 
+            }
+        }
+
+        stage('Kubernetes Deployment - DEV') {
+            steps {
+                parallel(
+                    "Deployment": {
+                        withKubeConfig([credentialsId: "kubeconfig"]) {
+                            sh "sed -i 's#replace#fadhiljr/ms-sample:${GIT_COMMIT}#g' k8s_deployment_service.yaml"
+                            sh "kubectl apply -f k8s_deployment_service.yaml"
+                        }
+                    },
+                    "Rollout Status": {
+                        withKubeConfig([credentialsId: "kubeconfig"]) {
+                            sh "bash k8s-deployment-rollout-status.sh"
+                        }
+                    }
+                )
+                
+            }
+        }
+
+        stage('K8S CIS Benchmark') {
+            steps {
+                script {
+                    parallel(
+                        "Master": {
+                            sh "bash cis-master.sh"
+                        },
+                        "Etcd": {
+                            sh "bash cis-etcd.sh"
+                        },
+                        "Kubelet": {
+                            sh "bash cis-kubelet.sh"
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            junit 'target/surefire-reports/*.xml'
+            jacoco execPattern: 'target/jacoco.exec'
+            dependencyCheckPublisher pattern: 'target/dependency-check-report.xml'
+        }
+    }
+}
