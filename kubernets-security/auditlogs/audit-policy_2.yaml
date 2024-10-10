@@ -1,0 +1,14 @@
+apiVersion: audit.k8s.io/v1 # This is required.
+kind: Policy
+rules:
+
+  - level: None
+    resources:
+    - group: ""
+      resources: ["secrets"]
+    namespaces: ["kube-system"]
+
+  - level: Metadata
+    resources:
+    - group: ""
+      resources: ["secrets"]

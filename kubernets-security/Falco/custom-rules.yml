@@ -1,0 +1,28 @@
+Basic Rule:
+
+- macro: custom_macro
+  condition: evt.type = execve and container.id != host
+
+- list: blacklist_binaries
+  items: [cat, grep, date]
+
+- rule: The program "cat" is run in a container
+  desc: an event will trigger every time you run cat in a container
+  condition: custom_macro and proc.name in (blacklist_binaries)
+  output: "cat was run inside a container (user=%user.name container=%container.name image=%container.image proc=%proc.cmdline)"
+  priority: INFO  
+
+UseCase Rule:
+
+- macro: custom_macro
+  condition: evt.type = execve and container.id != host
+
+- list: blacklist_binaries
+  items: [cat, grep, date]
+
+- rule: The program "cat" is run in a container
+  desc: an event will trigger every time you run cat in a container
+  condition: custom_macro and proc.name in (blacklist_binaries)
+  output: demo %evt.time %user.uid %proc.name
+  priority: INFO  
+
